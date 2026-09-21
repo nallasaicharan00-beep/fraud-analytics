@@ -3,11 +3,11 @@ const cors = require("cors");
 const { Pool } = require("pg");
 require("dotenv").config();
 
-const app = express();
-
-// ========================================
+// ==========================================
 // SERVER CONFIGURATION
-// ========================================
+// ==========================================
+
+const app = express();
 
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0";
@@ -15,12 +15,9 @@ const HOST = "0.0.0.0";
 app.use(cors());
 app.use(express.json());
 
-// ========================================
+// ==========================================
 // DATABASE CONFIGURATION
-// ========================================
-
-// Render will use DATABASE_URL.
-// Local development will use the individual DB variables.
+// ==========================================
 
 const pool = new Pool(
   process.env.DATABASE_URL
@@ -40,6 +37,7 @@ const pool = new Pool(
 );
 
 // Test PostgreSQL connection
+
 pool.query("SELECT NOW()")
   .then(() => {
     console.log("PostgreSQL connected successfully");
@@ -51,9 +49,9 @@ pool.query("SELECT NOW()")
     );
   });
 
-// ========================================
+// ==========================================
 // HOME ROUTE
-// ========================================
+// ==========================================
 
 app.get("/", (req, res) => {
   res.json({
@@ -62,9 +60,9 @@ app.get("/", (req, res) => {
   });
 });
 
-// ========================================
-// GET ALL TRANSACTIONS
-// ========================================
+// ==========================================
+// GET TRANSACTIONS
+// ==========================================
 
 app.get("/api/transactions", async (req, res) => {
   try {
@@ -85,9 +83,9 @@ app.get("/api/transactions", async (req, res) => {
   }
 });
 
-// ========================================
-// AMOUNT VALIDATION
-// ========================================
+// ==========================================
+// VALIDATE AMOUNT
+// ==========================================
 
 function validateAmount(amount) {
   const value = Number(amount);
@@ -130,11 +128,24 @@ function validateAmount(amount) {
   };
 }
 
-// ========================================
-// CALL ML SERVICE
-// ========================================
+// ==========================================
+// VALIDATE ML FEATURES
+// ==========================================
 
-async function getPrediction(amount) {
+function normalizeFeature(value) {
+  return value ? 1 : 0;
+}
+
+// ==========================================
+// CALL ML SERVICE
+// ==========================================
+
+async function getPrediction(
+  amount,
+  international = 0,
+  newDevice = 0,
+  highFrequency = 0
+) {
   const mlServiceUrl =
     process.env.ML_SERVICE_URL ||
     "http://127.0.0.1:5001";
@@ -144,7 +155,13 @@ async function getPrediction(amount) {
   );
 
   console.log(
-    `Amount sent to ML service: ${amount}`
+    "Features sent to ML:",
+    {
+      amount,
+      international,
+      newDevice,
+      highFrequency,
+    }
   );
 
   const response = await fetch(
@@ -158,6 +175,15 @@ async function getPrediction(amount) {
 
       body: JSON.stringify({
         amount: amount,
+
+        international:
+          normalizeFeature(international),
+
+        new_device:
+          normalizeFeature(newDevice),
+
+        high_frequency:
+          normalizeFeature(highFrequency),
       }),
     }
   );
@@ -172,21 +198,23 @@ async function getPrediction(amount) {
   if (!response.ok) {
     throw new Error(
       data.error ||
-      "ML service returned an error"
+        "ML service returned an error"
     );
   }
 
   return data;
 }
 
-// ========================================
-// PREDICT TRANSACTION
-// ========================================
+// ==========================================
+// SIMPLE ML PREDICTION
+// ==========================================
 
 app.post("/api/predict", async (req, res) => {
   try {
     const validation =
-      validateAmount(req.body?.amount);
+      validateAmount(
+        req.body?.amount
+      );
 
     if (!validation.valid) {
       return res.status(400).json({
@@ -194,9 +222,15 @@ app.post("/api/predict", async (req, res) => {
       });
     }
 
+    const amount =
+      validation.amount;
+
     const prediction =
       await getPrediction(
-        validation.amount
+        amount,
+        req.body?.international,
+        req.body?.new_device,
+        req.body?.high_frequency
       );
 
     res.json(prediction);
@@ -214,9 +248,9 @@ app.post("/api/predict", async (req, res) => {
   }
 });
 
-// ========================================
+// ==========================================
 // ANALYZE TRANSACTION
-// ========================================
+// ==========================================
 
 app.post("/api/analyze", async (req, res) => {
   console.log(
@@ -234,8 +268,11 @@ app.post("/api/analyze", async (req, res) => {
 
   try {
     // Validate amount
+
     const validation =
-      validateAmount(req.body?.amount);
+      validateAmount(
+        req.body?.amount
+      );
 
     if (!validation.valid) {
       return res.status(400).json({
@@ -246,17 +283,41 @@ app.post("/api/analyze", async (req, res) => {
     const amount =
       validation.amount;
 
+    // Read fraud features
+
+    const international =
+      normalizeFeature(
+        req.body?.international
+      );
+
+    const newDevice =
+      normalizeFeature(
+        req.body?.new_device
+      );
+
+    const highFrequency =
+      normalizeFeature(
+        req.body?.high_frequency
+      );
+
     // Call ML service
+
     const prediction =
-      await getPrediction(amount);
+      await getPrediction(
+        amount,
+        international,
+        newDevice,
+        highFrequency
+      );
 
     const riskScore =
-      Number(prediction.risk_score);
+      Number(
+        prediction.risk_score
+      );
 
     const status =
       prediction.status;
 
-    // Validate ML response
     if (!Number.isFinite(riskScore)) {
       throw new Error(
         "Invalid risk score received from ML service"
@@ -270,6 +331,7 @@ app.post("/api/analyze", async (req, res) => {
     }
 
     // Generate transaction ID
+
     const transactionId =
       `TX${Date.now()}`;
 
@@ -283,6 +345,7 @@ app.post("/api/analyze", async (req, res) => {
     );
 
     // Save transaction
+
     const result =
       await pool.query(
         `INSERT INTO transactions
@@ -306,12 +369,14 @@ app.post("/api/analyze", async (req, res) => {
     );
 
     // Send response
+
     res.status(201).json({
       transaction:
         result.rows[0],
 
       prediction: {
-        amount: amount,
+        amount:
+          amount,
 
         risk_score:
           riskScore,
@@ -322,6 +387,19 @@ app.post("/api/analyze", async (req, res) => {
         fraud_probability:
           prediction.fraud_probability ??
           null,
+
+        reasons:
+          prediction.reasons ??
+          [],
+
+        international:
+          international,
+
+        new_device:
+          newDevice,
+
+        high_frequency:
+          highFrequency,
       },
     });
 
@@ -345,9 +423,9 @@ app.post("/api/analyze", async (req, res) => {
   }
 });
 
-// ========================================
-// BULK / CSV TRANSACTIONS
-// ========================================
+// ==========================================
+// BULK CSV TRANSACTIONS
+// ==========================================
 
 app.post(
   "/api/transactions/bulk",
@@ -356,24 +434,29 @@ app.post(
       const transactions =
         req.body?.transactions;
 
-      // Check array
-      if (!Array.isArray(transactions)) {
+      if (
+        !Array.isArray(
+          transactions
+        )
+      ) {
         return res.status(400).json({
           error:
             "Transactions must be an array",
         });
       }
 
-      // Check empty array
-      if (transactions.length === 0) {
+      if (
+        transactions.length === 0
+      ) {
         return res.status(400).json({
           error:
             "No transactions provided",
         });
       }
 
-      // Limit CSV size
-      if (transactions.length > 500) {
+      if (
+        transactions.length > 500
+      ) {
         return res.status(400).json({
           error:
             "Maximum 500 transactions allowed",
@@ -382,7 +465,6 @@ app.post(
 
       const processed = [];
 
-      // Process each transaction
       for (
         const transaction
         of transactions
@@ -392,7 +474,6 @@ app.post(
             transaction?.amount
           );
 
-        // Skip invalid transactions
         if (!validation.valid) {
           continue;
         }
@@ -400,10 +481,27 @@ app.post(
         const amount =
           validation.amount;
 
-        // Get ML prediction
+        const international =
+          normalizeFeature(
+            transaction?.international
+          );
+
+        const newDevice =
+          normalizeFeature(
+            transaction?.new_device
+          );
+
+        const highFrequency =
+          normalizeFeature(
+            transaction?.high_frequency
+          );
+
         const prediction =
           await getPrediction(
-            amount
+            amount,
+            international,
+            newDevice,
+            highFrequency
           );
 
         const riskScore =
@@ -426,11 +524,9 @@ app.post(
           continue;
         }
 
-        // Generate unique ID
         const transactionId =
           `CSV${Date.now()}${processed.length}`;
 
-        // Save to database
         const result =
           await pool.query(
             `INSERT INTO transactions
@@ -478,9 +574,9 @@ app.post(
   }
 );
 
-// ========================================
+// ==========================================
 // START SERVER
-// ========================================
+// ==========================================
 
 app.listen(
   PORT,
