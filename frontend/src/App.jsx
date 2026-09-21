@@ -1,992 +1,864 @@
-import { useEffect, useState } from "react";
-import "./App.css";
+import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
-
 import {
-  PieChart,
-  Pie,
-  Cell,
   BarChart,
   Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
 } from "recharts";
+import "./App.css";
 
-const API_URL = "http://127.0.0.1:5000";
+// ========================================
+// API CONFIGURATION
+// ========================================
+
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  "http://127.0.0.1:5000";
+
+// ========================================
+// APP
+// ========================================
 
 function App() {
   const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(true);
 
   const [amount, setAmount] = useState("");
+
   const [prediction, setPrediction] = useState(null);
-  const [analyzing, setAnalyzing] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+
+  const [csvLoading, setCsvLoading] = useState(false);
+
+  const [error, setError] = useState("");
+
+  const [success, setSuccess] = useState("");
 
   const [lastUpdated, setLastUpdated] = useState(null);
 
-  // ==============================
-  // LOAD TRANSACTIONS
-  // ==============================
+  // ========================================
+  // FETCH TRANSACTIONS
+  // ========================================
 
-  async function loadTransactions() {
+  const fetchTransactions = async () => {
     try {
+      setError("");
+
       const response = await fetch(
         `${API_URL}/api/transactions`
       );
 
+      const data = await response.json();
+
       if (!response.ok) {
         throw new Error(
-          `Backend returned ${response.status}`
+          data.error ||
+            "Failed to fetch transactions"
         );
       }
 
-      const data = await response.json();
-
       setTransactions(data);
       setLastUpdated(new Date());
-      setLoading(false);
 
-      console.log(
-        "Transactions loaded:",
-        data
-      );
-    } catch (error) {
+    } catch (err) {
       console.error(
-        "Error loading transactions:",
-        error
+        "Fetch transactions error:",
+        err
       );
 
-      setLoading(false);
+      setError(
+        `Unable to load transactions: ${err.message}`
+      );
     }
-  }
+  };
 
-  // ==============================
-  // AUTO REFRESH
-  // ==============================
+  // ========================================
+  // INITIAL LOAD + AUTO REFRESH
+  // ========================================
 
   useEffect(() => {
-    loadTransactions();
+    fetchTransactions();
 
     const interval = setInterval(() => {
-      loadTransactions();
-    }, 10000);
+      fetchTransactions();
+    }, 30000);
 
-    return () => {
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, []);
 
-  // ==============================
-  // RISK SCORE
-  // ==============================
+  // ========================================
+  // ANALYZE TRANSACTION
+  // ========================================
 
-  function getRiskScore(transaction) {
-    return Number(
-      transaction.riskScore ??
-        transaction.risk_score ??
-        0
-    );
-  }
+  const analyzeTransaction = async () => {
+    setError("");
+    setSuccess("");
+    setPrediction(null);
 
-  // ==============================
-  // ANALYZE SINGLE TRANSACTION
-  // ==============================
-
-  async function analyzeTransaction() {
-    if (!amount || Number(amount) <= 0) {
-      alert(
-        "Please enter a valid transaction amount"
+    if (
+      amount === "" ||
+      amount === null
+    ) {
+      setError(
+        "Please enter a transaction amount."
       );
       return;
     }
 
-    setAnalyzing(true);
-    setPrediction(null);
+    const numericAmount =
+      Number(amount);
+
+    if (
+      !Number.isFinite(
+        numericAmount
+      ) ||
+      numericAmount <= 0
+    ) {
+      setError(
+        "Please enter a valid amount greater than zero."
+      );
+      return;
+    }
 
     try {
-      console.log(
-        "Sending analyze request:",
-        amount
-      );
+      setLoading(true);
 
       const response = await fetch(
         `${API_URL}/api/analyze`,
         {
           method: "POST",
+
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type":
+              "application/json",
           },
+
           body: JSON.stringify({
-            amount: Number(amount),
+            amount:
+              numericAmount,
           }),
         }
       );
 
-      const result = await response.json();
-
-      console.log(
-        "Backend analyze response:",
-        result
-      );
+      const data =
+        await response.json();
 
       if (!response.ok) {
         throw new Error(
-          result.details ||
-            result.error ||
-            `Server error: ${response.status}`
+          data.details ||
+            data.error ||
+            "Transaction analysis failed"
         );
       }
 
-      setPrediction(result.prediction);
-
-      await loadTransactions();
-
-      console.log(
-        "Transaction analyzed successfully"
+      setPrediction(
+        data.prediction
       );
-    } catch (error) {
+
+      setSuccess(
+        "Transaction analyzed and saved successfully."
+      );
+
+      setAmount("");
+
+      await fetchTransactions();
+
+    } catch (err) {
       console.error(
-        "Analysis error:",
-        error
+        "Analyze error:",
+        err
       );
 
-      alert(
-        `Transaction analysis failed:\n\n${error.message}`
+      setError(
+        err.message ||
+          "Transaction analysis failed."
       );
+
     } finally {
-      setAnalyzing(false);
+      setLoading(false);
     }
-  }
+  };
 
-  // ==============================
+  // ========================================
   // CSV UPLOAD
-  // ==============================
+  // ========================================
 
-  function handleCSVUpload(event) {
-    const file = event.target.files[0];
+  const handleCSVUpload = (
+    event
+  ) => {
+    const file =
+      event.target.files?.[0];
 
     if (!file) {
       return;
     }
 
+    setError("");
+    setSuccess("");
+
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
 
-      complete: async (results) => {
-        console.log(
-          "CSV Data:",
-          results.data
-        );
+      complete: async (
+        results
+      ) => {
+        try {
+          const rows =
+            results.data || [];
 
-        const csvTransactions =
-          results.data
-            .map((row) => {
-              const csvAmount = Number(
-                row.amount
+          if (rows.length === 0) {
+            throw new Error(
+              "CSV file is empty."
+            );
+          }
+
+          const formattedTransactions =
+            rows
+              .map((row) => ({
+                amount:
+                  row.amount ??
+                  row.Amount ??
+                  row.AMOUNT,
+              }))
+              .filter(
+                (row) =>
+                  row.amount !==
+                    undefined &&
+                  row.amount !== null &&
+                  row.amount !== ""
               );
 
-              if (
-                !csvAmount ||
-                csvAmount <= 0
-              ) {
-                return null;
+          if (
+            formattedTransactions.length ===
+            0
+          ) {
+            throw new Error(
+              "No valid 'amount' column found in the CSV file."
+            );
+          }
+
+          if (
+            formattedTransactions.length >
+            500
+          ) {
+            throw new Error(
+              "Maximum 500 transactions can be uploaded at once."
+            );
+          }
+
+          setCsvLoading(true);
+
+          const response =
+            await fetch(
+              `${API_URL}/api/transactions/bulk`,
+              {
+                method: "POST",
+
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                },
+
+                body: JSON.stringify({
+                  transactions:
+                    formattedTransactions,
+                }),
               }
+            );
 
-              return {
-                amount: csvAmount,
-              };
-            })
-            .filter(Boolean);
-
-        if (
-          csvTransactions.length === 0
-        ) {
-          alert(
-            "No valid transactions found in CSV"
-          );
-          return;
-        }
-
-        try {
-          console.log(
-            "Sending CSV to backend:",
-            csvTransactions
-          );
-
-          const response = await fetch(
-            `${API_URL}/api/transactions/bulk`,
-            {
-              method: "POST",
-
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
-
-              body: JSON.stringify({
-                transactions:
-                  csvTransactions,
-              }),
-            }
-          );
-
-          const result =
+          const data =
             await response.json();
-
-          console.log(
-            "CSV backend response:",
-            result
-          );
 
           if (!response.ok) {
             throw new Error(
-              result.details ||
-                result.error ||
+              data.details ||
+                data.error ||
                 "CSV processing failed"
             );
           }
 
-          alert(
-            `${result.count} transactions analyzed and saved successfully`
+          setSuccess(
+            `CSV processed successfully. ${data.count} transaction(s) analyzed.`
           );
 
-          await loadTransactions();
-        } catch (error) {
+          await fetchTransactions();
+
+        } catch (err) {
           console.error(
-            "CSV processing error:",
-            error
+            "CSV error:",
+            err
           );
 
-          alert(
-            `Failed to process CSV transactions:\n\n${error.message}`
+          setError(
+            err.message ||
+              "CSV processing failed."
           );
+
+        } finally {
+          setCsvLoading(false);
+
+          event.target.value =
+            "";
         }
       },
 
-      error: (error) => {
+      error: (parseError) => {
         console.error(
-          "CSV parsing error:",
-          error
+          "CSV parse error:",
+          parseError
         );
 
-        alert(
-          "Failed to read CSV file"
+        setError(
+          "Unable to read the CSV file."
         );
+
+        event.target.value =
+          "";
       },
     });
+  };
 
-    // Reset file input so the same file
-    // can be selected again
-    event.target.value = "";
-  }
-
-  // ==============================
+  // ========================================
   // STATISTICS
-  // ==============================
+  // ========================================
 
-  const totalTransactions =
-    transactions.length;
+  const statistics = useMemo(() => {
+    const total =
+      transactions.length;
 
-  const fraudTransactions =
-    transactions.filter(
-      (transaction) =>
-        transaction.status === "FRAUD"
-    ).length;
+    const fraudCount =
+      transactions.filter(
+        (transaction) =>
+          String(
+            transaction.status
+          ).toUpperCase() ===
+          "FRAUD"
+      ).length;
 
-  const safeTransactions =
-    transactions.filter(
-      (transaction) =>
-        transaction.status === "SAFE"
-    ).length;
+    const safeCount =
+      transactions.filter(
+        (transaction) =>
+          String(
+            transaction.status
+          ).toUpperCase() ===
+          "SAFE"
+      ).length;
 
-  const reviewTransactions =
-    transactions.filter(
-      (transaction) =>
-        transaction.status === "REVIEW"
-    ).length;
+    const totalAmount =
+      transactions.reduce(
+        (sum, transaction) =>
+          sum +
+          Number(
+            transaction.amount
+          ),
+        0
+      );
 
-  const totalValue =
-    transactions.reduce(
-      (total, transaction) =>
-        total +
-        Number(
-          transaction.amount || 0
-        ),
-      0
-    );
+    const averageRisk =
+      total > 0
+        ? transactions.reduce(
+            (sum, transaction) =>
+              sum +
+              Number(
+                transaction.risk_score ||
+                  0
+              ),
+            0
+          ) / total
+        : 0;
 
-  const fraudRate =
-    totalTransactions > 0
-      ? (fraudTransactions /
-          totalTransactions) *
-        100
-      : 0;
+    return {
+      total,
+      fraudCount,
+      safeCount,
+      totalAmount,
+      averageRisk,
+    };
+  }, [transactions]);
 
-  const averageRisk =
-    totalTransactions > 0
-      ? transactions.reduce(
-          (total, transaction) =>
-            total +
-            getRiskScore(transaction),
-          0
-        ) / totalTransactions
-      : 0;
-
-  // ==============================
+  // ========================================
   // PIE CHART DATA
-  // ==============================
+  // ========================================
 
-  const statusChartData = [
-    {
-      name: "Fraud",
-      value: fraudTransactions,
-    },
+  const pieData = [
     {
       name: "Safe",
-      value: safeTransactions,
+      value:
+        statistics.safeCount,
     },
     {
-      name: "Review",
-      value: reviewTransactions,
+      name: "Fraud",
+      value:
+        statistics.fraudCount,
     },
   ];
 
-  // ==============================
+  // ========================================
   // BAR CHART DATA
-  // ==============================
+  // ========================================
 
-  const valueChartData = [
-    {
-      name: "Fraud",
+  const barData =
+    transactions
+      .slice(-10)
+      .map((transaction) => ({
+        id: transaction.id,
 
-      value: transactions
-        .filter(
-          (transaction) =>
-            transaction.status === "FRAUD"
-        )
-        .reduce(
-          (total, transaction) =>
-            total +
-            Number(
-              transaction.amount || 0
-            ),
-          0
-        ),
-    },
+        amount:
+          Number(
+            transaction.amount
+          ),
 
-    {
-      name: "Safe",
+        risk:
+          Number(
+            transaction.risk_score ||
+              0
+          ) * 100,
+      }));
 
-      value: transactions
-        .filter(
-          (transaction) =>
-            transaction.status === "SAFE"
-        )
-        .reduce(
-          (total, transaction) =>
-            total +
-            Number(
-              transaction.amount || 0
-            ),
-          0
-        ),
-    },
+  // ========================================
+  // FORMAT CURRENCY
+  // ========================================
 
-    {
-      name: "Review",
-
-      value: transactions
-        .filter(
-          (transaction) =>
-            transaction.status === "REVIEW"
-        )
-        .reduce(
-          (total, transaction) =>
-            total +
-            Number(
-              transaction.amount || 0
-            ),
-          0
-        ),
-    },
-  ];
-
-  // ==============================
-  // MONEY FORMAT
-  // ==============================
-
-  function formatMoney(value) {
+  const formatCurrency = (
+    value
+  ) => {
     return new Intl.NumberFormat(
       "en-IN",
       {
         style: "currency",
         currency: "INR",
-        maximumFractionDigits: 0,
+        maximumFractionDigits: 2,
       }
     ).format(value);
-  }
+  };
 
-  // ==============================
-  // LAST UPDATED
-  // ==============================
+  // ========================================
+  // FORMAT RISK
+  // ========================================
 
-  function formatLastUpdated() {
-    if (!lastUpdated) {
-      return "Waiting for data...";
-    }
-
-    return lastUpdated.toLocaleTimeString(
-      "en-IN",
-      {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      }
-    );
-  }
-
-  // ==============================
-  // STATUS CLASS
-  // ==============================
-
-  function getStatusClass(status) {
-    if (status === "FRAUD") {
-      return "status-fraud";
-    }
-
-    if (status === "REVIEW") {
-      return "status-review";
-    }
-
-    if (status === "SAFE") {
-      return "status-safe";
-    }
-
-    return "status-pending";
-  }
-
-  // ==============================
-  // LOADING SCREEN
-  // ==============================
-
-  if (loading) {
+  const formatRisk = (
+    value
+  ) => {
     return (
-      <div className="dashboard">
-        <h1>
-          Loading Fraud Analytics...
-        </h1>
-      </div>
-    );
-  }
+      Number(value || 0) *
+      100
+    ).toFixed(2);
+  };
 
-  // ==============================
-  // MAIN DASHBOARD
-  // ==============================
+  // ========================================
+  // RENDER
+  // ========================================
 
   return (
-    <div className="dashboard">
+    <div className="app">
 
-      {/* ================= HEADER ================= */}
+      {/* ================================== */}
+      {/* HEADER */}
+      {/* ================================== */}
 
       <header className="dashboard-header">
 
         <div>
           <h1>
             Fraud Analytics
+            Dashboard
           </h1>
 
           <p>
-            Real-Time Fraud Detection Platform
+            Real-time transaction
+            monitoring and ML-powered
+            fraud detection
           </p>
         </div>
 
-        <div>
+        <div className="header-status">
+          <span className="status-dot"></span>
 
-          <div className="system-status">
-
-            <span className="status-dot"></span>
-
-            System Online
-
-          </div>
-
-          <p
-            style={{
-              textAlign: "right",
-              marginTop: "8px",
-              fontSize: "12px",
-              color: "#7a8495",
-            }}
-          >
-            Last updated:{" "}
-            {formatLastUpdated()}
-          </p>
-
+          System Online
         </div>
 
       </header>
 
-      {/* ================= STATISTICS ================= */}
+      {/* ================================== */}
+      {/* ERROR / SUCCESS */}
+      {/* ================================== */}
+
+      {error && (
+        <div className="alert error">
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="alert success">
+          {success}
+        </div>
+      )}
+
+      {/* ================================== */}
+      {/* STATISTICS */}
+      {/* ================================== */}
 
       <section className="stats-grid">
 
         <div className="stat-card">
-
-          <h3>
+          <span>
             Total Transactions
-          </h3>
+          </span>
 
-          <h2>
-            {totalTransactions}
-          </h2>
-
-          <p>
-            Processed transactions
-          </p>
-
+          <strong>
+            {statistics.total}
+          </strong>
         </div>
 
-        <div className="stat-card fraud-card">
-
-          <h3>
-            Fraud Detected
-          </h3>
-
-          <h2>
-            {fraudTransactions}
-          </h2>
-
-          <p>
-            High-risk transactions
-          </p>
-
-        </div>
-
-        <div className="stat-card safe-card">
-
-          <h3>
+        <div className="stat-card">
+          <span>
             Safe Transactions
-          </h3>
+          </span>
 
-          <h2>
-            {safeTransactions}
-          </h2>
-
-          <p>
-            Low-risk transactions
-          </p>
-
+          <strong>
+            {statistics.safeCount}
+          </strong>
         </div>
 
-        <div className="stat-card review-card">
+        <div className="stat-card">
+          <span>
+            Fraud Transactions
+          </span>
 
-          <h3>
-            Under Review
-          </h3>
+          <strong>
+            {statistics.fraudCount}
+          </strong>
+        </div>
 
-          <h2>
-            {reviewTransactions}
-          </h2>
+        <div className="stat-card">
+          <span>
+            Total Amount
+          </span>
 
-          <p>
-            Medium-risk transactions
-          </p>
+          <strong>
+            {formatCurrency(
+              statistics.totalAmount
+            )}
+          </strong>
+        </div>
 
+        <div className="stat-card">
+          <span>
+            Average Risk
+          </span>
+
+          <strong>
+            {formatRisk(
+              statistics.averageRisk /
+                1
+            )}
+            %
+          </strong>
         </div>
 
       </section>
 
-      {/* ================= SECOND STATISTICS ================= */}
+      {/* ================================== */}
+      {/* ANALYZE + CSV */}
+      {/* ================================== */}
 
-      <section className="stats-grid">
+      <section className="control-grid">
 
-        <div className="stat-card">
+        {/* Analyze Transaction */}
 
-          <h3>
-            Fraud Rate
-          </h3>
-
-          <h2>
-            {fraudRate.toFixed(1)}%
-          </h2>
-
-          <p>
-            Percentage of fraud transactions
-          </p>
-
-        </div>
-
-        <div className="stat-card">
-
-          <h3>
-            Average Risk Score
-          </h3>
-
-          <h2>
-            {averageRisk.toFixed(2)}
-          </h2>
-
-          <p>
-            Average ML risk score
-          </p>
-
-        </div>
-
-        <div className="stat-card">
-
-          <h3>
-            Total Value
-          </h3>
-
-          <h2>
-            {formatMoney(totalValue)}
-          </h2>
-
-          <p>
-            All processed transactions
-          </p>
-
-        </div>
-
-        <div className="stat-card">
-
-          <h3>
-            Monitoring
-          </h3>
-
-          <h2>
-            LIVE
-          </h2>
-
-          <p>
-            Automatic refresh every 10 seconds
-          </p>
-
-        </div>
-
-      </section>
-
-      {/* ================= TOTAL VALUE ================= */}
-
-      <section className="value-card">
-
-        <div>
-
-          <p>
-            Total Transaction Value
-          </p>
-
-          <h2>
-            {formatMoney(totalValue)}
-          </h2>
-
-        </div>
-
-        <div className="rupee-icon">
-          ₹
-        </div>
-
-      </section>
-
-      {/* ================= CHARTS ================= */}
-
-      <section className="charts-grid">
-
-        {/* PIE CHART */}
-
-        <div className="chart-card">
-
-          <h2>
-            Transaction Status
-          </h2>
-
-          <p>
-            Distribution of detected transactions
-          </p>
-
-          <ResponsiveContainer
-            width="100%"
-            height={300}
-          >
-
-            <PieChart>
-
-              <Pie
-                data={statusChartData}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={100}
-                label
-              >
-
-                {statusChartData.map(
-                  (entry) => {
-
-                    let fill;
-
-                    if (
-                      entry.name ===
-                      "Fraud"
-                    ) {
-                      fill = "#ef4444";
-                    }
-
-                    else if (
-                      entry.name ===
-                      "Safe"
-                    ) {
-                      fill = "#22c55e";
-                    }
-
-                    else {
-                      fill = "#f59e0b";
-                    }
-
-                    return (
-                      <Cell
-                        key={
-                          entry.name
-                        }
-                        fill={fill}
-                      />
-                    );
-                  }
-                )}
-
-              </Pie>
-
-              <Tooltip />
-
-              <Legend />
-
-            </PieChart>
-
-          </ResponsiveContainer>
-
-        </div>
-
-        {/* BAR CHART */}
-
-        <div className="chart-card">
-
-          <h2>
-            Transaction Value
-          </h2>
-
-          <p>
-            Total value by transaction status
-          </p>
-
-          <ResponsiveContainer
-            width="100%"
-            height={300}
-          >
-
-            <BarChart
-              data={valueChartData}
-            >
-
-              <CartesianGrid
-                strokeDasharray="3 3"
-              />
-
-              <XAxis
-                dataKey="name"
-              />
-
-              <YAxis />
-
-              <Tooltip />
-
-              <Legend />
-
-              <Bar
-                dataKey="value"
-                name="Transaction Value"
-                fill="#4f46e5"
-              />
-
-            </BarChart>
-
-          </ResponsiveContainer>
-
-        </div>
-
-      </section>
-
-      {/* ================= ANALYZE TRANSACTION ================= */}
-
-      <section className="analyze-card">
-
-        <div className="analyze-text">
+        <div className="panel">
 
           <h2>
             Analyze Transaction
           </h2>
 
           <p>
-            Enter a transaction amount to run
-            fraud detection.
+            Enter a transaction amount
+            and let the ML model assess
+            the fraud risk.
           </p>
 
-        </div>
+          <div className="input-row">
 
-        <div className="analyze-controls">
-
-          <input
-            type="number"
-            placeholder="Enter amount"
-            value={amount}
-            onChange={(event) =>
-              setAmount(
-                event.target.value
-              )
-            }
-          />
-
-          <button
-            onClick={
-              analyzeTransaction
-            }
-            disabled={analyzing}
-          >
-
-            {analyzing
-              ? "Analyzing..."
-              : "Analyze Transaction"}
-
-          </button>
-
-        </div>
-
-      </section>
-
-      {/* ================= ML PREDICTION ================= */}
-
-      {prediction && (
-
-        <section className="prediction-card">
-
-          <h2>
-            ML Prediction
-          </h2>
-
-          <div className="prediction-result">
-
-            <p>
-
-              <strong>
-                Amount:
-              </strong>{" "}
-
-              {formatMoney(
-                Number(
-                  prediction.amount ??
-                    amount
+            <input
+              type="number"
+              min="1"
+              step="0.01"
+              placeholder="Enter amount"
+              value={amount}
+              onChange={(event) =>
+                setAmount(
+                  event.target.value
                 )
-              )}
+              }
+              onKeyDown={(event) => {
+                if (
+                  event.key ===
+                  "Enter"
+                ) {
+                  analyzeTransaction();
+                }
+              }}
+            />
 
-            </p>
-
-            <p>
-
-              <strong>
-                Status:
-              </strong>{" "}
-
-              {prediction.status ||
-                "Unknown"}
-
-            </p>
-
-            <p>
-
-              <strong>
-                Risk Score:
-              </strong>{" "}
-
-              {prediction.risk_score ??
-                "N/A"}
-
-            </p>
-
-            <p>
-
-              <strong>
-                Fraud Probability:
-              </strong>{" "}
-
-              {prediction.fraud_probability !==
-              undefined
-                ? `${(
-                    Number(
-                      prediction.fraud_probability
-                    ) * 100
-                  ).toFixed(2)}%`
-                : "N/A"}
-
-            </p>
+            <button
+              onClick={
+                analyzeTransaction
+              }
+              disabled={loading}
+            >
+              {loading
+                ? "Analyzing..."
+                : "Analyze"}
+            </button>
 
           </div>
 
-        </section>
+          {/* Prediction */}
 
-      )}
+          {prediction && (
+            <div
+              className={`prediction-card ${
+                prediction.status ===
+                "FRAUD"
+                  ? "fraud"
+                  : "safe"
+              }`}
+            >
 
-      {/* ================= CSV UPLOAD ================= */}
+              <h3>
+                Prediction
+              </h3>
 
-      <section className="analyze-card">
+              <div className="prediction-status">
+                {prediction.status}
+              </div>
 
-        <div className="analyze-text">
+              <div className="prediction-details">
 
-          <h2>
-            Upload Transactions
-          </h2>
+                <div>
+                  <span>
+                    Amount
+                  </span>
 
-          <p>
-            Upload a CSV file for ML analysis.
-          </p>
+                  <strong>
+                    {formatCurrency(
+                      prediction.amount
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>
+                    Risk Score
+                  </span>
+
+                  <strong>
+                    {formatRisk(
+                      prediction.risk_score
+                    )}
+                    %
+                  </strong>
+                </div>
+
+                <div>
+                  <span>
+                    Fraud Probability
+                  </span>
+
+                  <strong>
+                    {formatRisk(
+                      prediction.fraud_probability
+                    )}
+                    %
+                  </strong>
+                </div>
+
+              </div>
+
+            </div>
+          )}
 
         </div>
 
-        <input
-          type="file"
-          accept=".csv"
-          onChange={
-            handleCSVUpload
-          }
-        />
+        {/* CSV Upload */}
+
+        <div className="panel">
+
+          <h2>
+            Bulk CSV Analysis
+          </h2>
+
+          <p>
+            Upload a CSV file containing
+            an <strong>amount</strong>{" "}
+            column.
+          </p>
+
+          <label className="upload-box">
+
+            <input
+              type="file"
+              accept=".csv"
+              onChange={
+                handleCSVUpload
+              }
+              disabled={csvLoading}
+            />
+
+            <span>
+              {csvLoading
+                ? "Processing CSV..."
+                : "Choose CSV File"}
+            </span>
+
+          </label>
+
+          <small>
+            Maximum 500 transactions
+          </small>
+
+        </div>
 
       </section>
 
-      {/* ================= TRANSACTION TABLE ================= */}
+      {/* ================================== */}
+      {/* CHARTS */}
+      {/* ================================== */}
 
-      <section className="transactions-card">
+      <section className="charts-grid">
 
-        <div className="transactions-header">
+        {/* Pie Chart */}
+
+        <div className="panel chart-panel">
+
+          <h2>
+            Transaction Distribution
+          </h2>
+
+          <div className="chart-container">
+
+            <ResponsiveContainer
+              width="100%"
+              height={300}
+            >
+
+              <PieChart>
+
+                <Pie
+                  data={pieData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={100}
+                  label
+                >
+
+                  <Cell />
+
+                  <Cell />
+
+                </Pie>
+
+                <Tooltip />
+
+                <Legend />
+
+              </PieChart>
+
+            </ResponsiveContainer>
+
+          </div>
+
+        </div>
+
+        {/* Bar Chart */}
+
+        <div className="panel chart-panel">
+
+          <h2>
+            Recent Transaction Risk
+          </h2>
+
+          <div className="chart-container">
+
+            <ResponsiveContainer
+              width="100%"
+              height={300}
+            >
+
+              <BarChart
+                data={barData}
+              >
+
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                />
+
+                <XAxis
+                  dataKey="id"
+                  tick={{
+                    fontSize: 10,
+                  }}
+                />
+
+                <YAxis />
+
+                <Tooltip />
+
+                <Legend />
+
+                <Bar
+                  dataKey="risk"
+                  name="Risk %"
+                />
+
+              </BarChart>
+
+            </ResponsiveContainer>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      {/* ================================== */}
+      {/* TRANSACTION TABLE */}
+      {/* ================================== */}
+
+      <section className="panel table-panel">
+
+        <div className="table-header">
 
           <div>
-
             <h2>
               Recent Transactions
             </h2>
 
-            <p>
-              Live transaction monitoring
-            </p>
-
+            {lastUpdated && (
+              <small>
+                Last updated:{" "}
+                {lastUpdated.toLocaleTimeString()}
+              </small>
+            )}
           </div>
 
           <button
+            className="refresh-button"
             onClick={
-              loadTransactions
+              fetchTransactions
             }
           >
             Refresh
@@ -994,127 +866,121 @@ function App() {
 
         </div>
 
-        <div className="table-container">
+        {transactions.length ===
+        0 ? (
+          <div className="empty-state">
+            No transactions found.
+          </div>
+        ) : (
+          <div className="table-wrapper">
 
-          <table>
+            <table>
 
-            <thead>
+              <thead>
 
-              <tr>
+                <tr>
+                  <th>
+                    Transaction ID
+                  </th>
 
-                <th>
-                  Transaction ID
-                </th>
+                  <th>
+                    Amount
+                  </th>
 
-                <th>
-                  Amount
-                </th>
+                  <th>
+                    Risk Score
+                  </th>
 
-                <th>
-                  Risk Score
-                </th>
+                  <th>
+                    Status
+                  </th>
+                </tr>
 
-                <th>
-                  Status
-                </th>
+              </thead>
 
-              </tr>
+              <tbody>
 
-            </thead>
-
-            <tbody>
-
-              {transactions.map(
-                (transaction) => {
-
-                  const riskScore =
-                    getRiskScore(
+                {[
+                  ...transactions,
+                ]
+                  .reverse()
+                  .map(
+                    (
                       transaction
-                    );
+                    ) => (
+                      <tr
+                        key={
+                          transaction.id
+                        }
+                      >
 
-                  return (
+                        <td>
+                          {
+                            transaction.id
+                          }
+                        </td>
 
-                    <tr
-                      key={
-                        transaction.id
-                      }
-                    >
-
-                      <td>
-                        {transaction.id}
-                      </td>
-
-                      <td>
-                        {formatMoney(
-                          Number(
+                        <td>
+                          {formatCurrency(
                             transaction.amount
-                          )
-                        )}
-                      </td>
+                          )}
+                        </td>
 
-                      <td>
+                        <td>
+                          {formatRisk(
+                            transaction.risk_score
+                          )}
+                          %
+                        </td>
 
-                        <div className="risk-score">
+                        <td>
 
-                          <span>
-                            {riskScore.toFixed(
-                              2
-                            )}
+                          <span
+                            className={`status-badge ${
+                              String(
+                                transaction.status
+                              ).toUpperCase() ===
+                              "FRAUD"
+                                ? "fraud"
+                                : "safe"
+                            }`}
+                          >
+                            {
+                              transaction.status
+                            }
                           </span>
 
-                          <div className="risk-bar">
+                        </td>
 
-                            <div
-                              className="risk-fill"
-                              style={{
-                                width:
-                                  `${Math.min(
-                                    riskScore *
-                                      100,
-                                    100
-                                  )}%`,
-                              }}
-                            ></div>
+                      </tr>
+                    )
+                  )}
 
-                          </div>
+              </tbody>
 
-                        </div>
+            </table>
 
-                      </td>
-
-                      <td>
-
-                        <span
-                          className={
-                            `status-badge ${
-                              getStatusClass(
-                                transaction.status
-                              )
-                            }`
-                          }
-                        >
-
-                          {
-                            transaction.status
-                          }
-
-                        </span>
-
-                      </td>
-
-                    </tr>
-
-                  );
-                }
-              )}
-
-            </tbody>
-
-          </table>
-
-        </div>
+          </div>
+        )}
 
       </section>
+
+      {/* ================================== */}
+      {/* FOOTER */}
+      {/* ================================== */}
+
+      <footer className="dashboard-footer">
+
+        <span>
+          Fraud Analytics Platform
+        </span>
+
+        <span>
+          React • Node.js • PostgreSQL
+          • Machine Learning
+        </span>
+
+      </footer>
 
     </div>
   );
